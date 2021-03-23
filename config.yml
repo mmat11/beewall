@@ -1,0 +1,22 @@
+ingress:
+  - ips:
+    - 1.2.3.4
+    - 5.6.7.8
+    protocol: icmp
+  - ips:
+    - 10.0.0.1
+    protocol: tcp
+    ports:
+    - 80
+    - 443
+egress:
+  - ips:
+    - 1.2.3.4
+    - 5.6.7.8
+    protocol: icmp
+  - ips:
+    - 10.0.0.1
+    protocol: tcp
+    ports:
+    - 80
+    - 443

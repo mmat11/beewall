@@ -2,19 +2,60 @@ package internal
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 
 	"inet.af/netaddr"
 )
 
 type Config struct {
-	Ingress []Rule
-	Egress  []Rule
+	InterfacesConfig []InterfaceConfig
+	Rules            struct {
+		Ingress []Rule
+		Egress  []Rule
+	}
 }
 
+type InterfaceConfig struct {
+	Interface     net.Interface
+	XDPAttachMode XDPAttachMode
+}
+
+type Rule struct {
+	IPs      []netaddr.IP
+	Protocol Protocol
+	Ports    []Port
+}
+
+type Port uint16
+
+type Protocol uint8
+
+const (
+	ProtocolICMP Protocol = iota
+	ProtocolTCP
+	ProtocolUDP
+)
+
+/* https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/if_link.h#L1165 */
+type XDPAttachMode uint8
+
+const (
+	XDPAttachModeGeneric XDPAttachMode = 0
+	XDPAttachModeSkb     XDPAttachMode = 1 << 1
+	XDPAttachModeDrv     XDPAttachMode = 1 << 2
+	XDPAttachModeHW      XDPAttachMode = 1 << 3
+)
+
 type rawConfig struct {
-	Ingress []rawRule `yaml:"ingress"`
-	Egress  []rawRule `yaml:"egress"`
+	InterfacesConfig []struct {
+		Interface     string `yaml:"interface"`
+		XDPAttachMode string `yaml:"xdp_attach_mode"`
+	} `yaml:"interfaces_config"`
+	Rules struct {
+		Ingress []rawRule `yaml:"ingress"`
+		Egress  []rawRule `yaml:"egress"`
+	} `yaml:"rules"`
 }
 
 type rawRule struct {
@@ -29,19 +70,43 @@ func (cfg *Config) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		return err
 	}
 
-	for _, in := range raw.Ingress {
-		r, err := ruleFromRaw(&in)
+	for _, ifc := range raw.InterfacesConfig {
+		var ifCfg InterfaceConfig
+
+		netIf, err := net.InterfaceByName(ifc.Interface)
 		if err != nil {
-			return err
+			return fmt.Errorf("load config interface: %w", err)
 		}
-		cfg.Ingress = append(cfg.Ingress, *r)
+		ifCfg.Interface = *netIf
+
+		switch ifc.XDPAttachMode {
+		case "", "generic":
+			ifCfg.XDPAttachMode = XDPAttachModeGeneric
+		case "skb":
+			ifCfg.XDPAttachMode = XDPAttachModeSkb
+		case "drv":
+			ifCfg.XDPAttachMode = XDPAttachModeDrv
+		case "hw":
+			ifCfg.XDPAttachMode = XDPAttachModeHW
+		default:
+			return fmt.Errorf("XDP attach mode for interface %s invalid or not supported", netIf.Name)
+		}
+
+		cfg.InterfacesConfig = append(cfg.InterfacesConfig, ifCfg)
 	}
-	for _, in := range raw.Egress {
+	for _, in := range raw.Rules.Ingress {
 		r, err := ruleFromRaw(&in)
 		if err != nil {
 			return err
 		}
-		cfg.Egress = append(cfg.Egress, *r)
+		cfg.Rules.Ingress = append(cfg.Rules.Ingress, *r)
+	}
+	for _, in := range raw.Rules.Egress {
+		r, err := ruleFromRaw(&in)
+		if err != nil {
+			return err
+		}
+		cfg.Rules.Egress = append(cfg.Rules.Egress, *r)
 	}
 
 	return nil
@@ -78,4 +143,59 @@ func ruleFromRaw(rr *rawRule) (*Rule, error) {
 	}
 
 	return &r, nil
+}
+
+type BpfRule struct {
+	L3proto uint32
+	L4proto uint32
+	Saddr   uint32
+	Saddr6  uint32 // todo: __u64 hi __u64 lo ???
+	Dport   uint16
+}
+
+func (cfg *Config) ToBpf() ([]BpfRule, []BpfRule) {
+	uint32FromIP4 := func(ip netaddr.IP) uint32 {
+		b := ip.As4()
+		return uint32(b[3]) | uint32(b[2])<<8 | uint32(b[1])<<16 | uint32(b[0])<<24
+	}
+
+	toBpf := func(rules []Rule) []BpfRule {
+		var bpfRules = make([]BpfRule, 0)
+
+		for _, r := range rules {
+			for _, ip := range r.IPs {
+				if r.Protocol == ProtocolICMP {
+					// set the ports to [0] in order to loop once
+					r.Ports = []Port{Port(0)}
+				}
+
+				for _, port := range r.Ports {
+					var rule BpfRule
+
+					if ip.Is4() {
+						rule.L3proto = 0
+						rule.Saddr = uint32FromIP4(ip)
+					} else {
+						rule.L3proto = 1
+						rule.Saddr6 = 0 // todo: fixme
+					}
+
+					switch r.Protocol {
+					case ProtocolICMP:
+						rule.L4proto = 0
+					case ProtocolTCP:
+						rule.L4proto = 1
+					case ProtocolUDP:
+						rule.L4proto = 2
+					}
+					rule.Dport = uint16(port)
+
+					bpfRules = append(bpfRules, rule)
+				}
+			}
+		}
+
+		return bpfRules
+	}
+	return toBpf(cfg.Rules.Ingress), toBpf(cfg.Rules.Egress)
 }

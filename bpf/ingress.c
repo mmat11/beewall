@@ -1,16 +1,19 @@
+#define BPF_NO_PRESERVE_ACCESS_INDEX 0 /* workaround vmlinux.h attributes */
+
 #include "vmlinux.h"
 #include "bpf_endian.h"
 #include "bpf_helpers.h"
-
 
 /* https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/if_ether.h */
 #define ETH_P_IP	0x0800
 #define ETH_P_IPV6	0x86DD
 
+#define MAX_RULES   128
+
 typedef enum { IP4, IP6 } L3Proto;
 typedef enum { ICMP, TCP, UDP } L4Proto;
 
-typedef struct {
+typedef struct __attribute__((packed)) {
 	/* Protocols */
 	L3Proto l3proto;
 	L4Proto l4proto;
@@ -37,6 +40,21 @@ static __always_inline void parse_ip6(struct xdp_md*, struct ethhdr*, Packet*);
 /* use void* instead of iphdr/ipv6hdr since it's gonna get casted anyway */
 static __always_inline void parse_tcp(struct xdp_md*, void*, Packet*);
 static __always_inline void parse_udp(struct xdp_md*, void*, Packet*);
+
+struct ingress_rule {
+	L3Proto l3proto;
+	L4Proto l4proto;
+	__u32   saddr;
+	__u32   saddr6; // todo: fixme
+	__u16   dport;
+} __attribute__((packed));
+
+struct bpf_map_def SEC("maps") ingress_rules = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(__u32),
+    .value_size = sizeof(struct ingress_rule),
+    .max_entries = MAX_RULES,
+};
 
 SEC("xdp")
 int beewall_ingress(struct xdp_md *ctx) {
@@ -79,7 +97,6 @@ end:
 }
 
 static __always_inline void parse_ip(struct xdp_md *ctx, struct ethhdr *eth, Packet *pkt) {
-	void *data = (void *)(__s64)ctx->data;
 	void *data_end = (void *)(__s64)ctx->data_end;
 
 	struct iphdr *ip = (struct iphdr *)(eth + 1);
@@ -114,7 +131,6 @@ static __always_inline void parse_ip(struct xdp_md *ctx, struct ethhdr *eth, Pac
 }
 
 static __always_inline void parse_ip6(struct xdp_md *ctx, struct ethhdr *eth, Packet *pkt) {
-	void *data = (void *)(__s64)ctx->data;
 	void *data_end = (void *)(__s64)ctx->data_end;
 
 	struct ipv6hdr *ip = (struct ipv6hdr *)(eth + 1);
@@ -149,7 +165,6 @@ static __always_inline void parse_ip6(struct xdp_md *ctx, struct ethhdr *eth, Pa
 }
 
 static __always_inline void parse_tcp(struct xdp_md *ctx, void *ip, Packet *pkt) {
-	void *data = (void *)(__s64)ctx->data;
 	void *data_end = (void *)(__s64)ctx->data_end;
 
 	struct tcphdr *tcp = (struct tcphdr *)(ip + 1);
@@ -165,7 +180,6 @@ static __always_inline void parse_tcp(struct xdp_md *ctx, void *ip, Packet *pkt)
 }
 
 static __always_inline void parse_udp(struct xdp_md *ctx, void *ip, Packet *pkt) {
-	void *data = (void *)(__s64)ctx->data;
 	void *data_end = (void *)(__s64)ctx->data_end;
 
 	struct udphdr *udp = (struct udphdr *)(ip + 1);
@@ -181,8 +195,35 @@ static __always_inline void parse_udp(struct xdp_md *ctx, void *ip, Packet *pkt)
 }
 
 static __always_inline enum xdp_action handle_packet(Packet *pkt) {
-	/* TODO: compare and drop/pass */
-	return XDP_PASS;
+	struct ingress_rule *ir;
+
+	bpf_printk("Pkt(%d,%d,%d)", pkt->l4proto, pkt->saddr, pkt->dport);
+
+	#pragma clang loop unroll(full)
+	for (__u32 i = 0; i < MAX_RULES; i++) {
+		__u32 key = i;
+
+		ir = bpf_map_lookup_elem(&ingress_rules, &key);
+		if (!ir) {
+			/* no rules */
+			goto drop;
+		}
+
+		if (
+			(pkt->l3proto == ir->l3proto) &&
+			(pkt->l4proto == ir->l4proto) &&
+			(pkt->saddr == ir->saddr) &&
+			(pkt->dport == ir->dport)
+		) {
+			bpf_printk("PASS");
+			return XDP_PASS;
+		}
+	}
+
+drop:
+	/* default action: drop */
+	bpf_printk("DROP");
+	return XDP_DROP;
 }
 
 char __license[] SEC("license") = "Dual MIT/GPL";

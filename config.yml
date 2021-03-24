@@ -1,22 +1,26 @@
-ingress:
-  - ips:
-    - 1.2.3.4
-    - 5.6.7.8
-    protocol: icmp
-  - ips:
-    - 10.0.0.1
-    protocol: tcp
-    ports:
-    - 80
-    - 443
-egress:
-  - ips:
-    - 1.2.3.4
-    - 5.6.7.8
-    protocol: icmp
-  - ips:
-    - 10.0.0.1
-    protocol: tcp
-    ports:
-    - 80
-    - 443
+interfaces_config:
+  - interface: enp0s3
+    xdp_attach_mode: generic
+rules:
+  ingress:
+    - ips:
+      - 8.8.8.8
+      protocol: icmp
+    - ips:
+      - 10.0.0.1
+      - 10.0.0.2
+      protocol: tcp
+      ports:
+      - 80
+      - 443
+  egress:
+    - ips:
+      - 1.2.3.4
+      - 5.6.7.8
+      protocol: icmp
+    - ips:
+      - 10.0.0.1
+      protocol: tcp
+      ports:
+      - 80
+      - 443

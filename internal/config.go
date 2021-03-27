@@ -149,12 +149,12 @@ type BpfRule struct {
 	L3proto uint32
 	L4proto uint32
 	Saddr   uint32
-	Saddr6  uint32 // todo: __u64 hi __u64 lo ???
+	Saddr6  [4]uint32
 	Dport   uint16
 }
 
 func (cfg *Config) ToBpf() ([]BpfRule, []BpfRule) {
-	uint32FromIP4 := func(ip netaddr.IP) uint32 {
+	saddrFromIPv4 := func(ip netaddr.IP) uint32 {
 		b := ip.As4()
 		return uint32(b[3]) | uint32(b[2])<<8 | uint32(b[1])<<16 | uint32(b[0])<<24
 	}
@@ -174,10 +174,10 @@ func (cfg *Config) ToBpf() ([]BpfRule, []BpfRule) {
 
 					if ip.Is4() {
 						rule.L3proto = 0
-						rule.Saddr = uint32FromIP4(ip)
+						rule.Saddr = saddrFromIPv4(ip)
 					} else {
 						rule.L3proto = 1
-						rule.Saddr6 = 0 // todo: fixme
+						rule.Saddr6 = [4]uint32{0, 0, 0, 0} // todo: fixme
 					}
 
 					switch r.Protocol {

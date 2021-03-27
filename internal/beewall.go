@@ -22,7 +22,7 @@ func Run(ctx context.Context, cfg Config) error {
 
 	ingressRules, _ := cfg.ToBpf()
 	for i, rule := range ingressRules {
-		if err := in.BeewallIngressMaps.IngressRules.Put(uint32(i), rule); err != nil {
+		if err := in.BeewallIngressMaps.IngressRules.Put(rule, uint8(1)); err != nil {
 			log.Fatalf("map put %v(%v): %v", i, rule, err)
 		}
 	}

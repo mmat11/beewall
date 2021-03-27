@@ -4,11 +4,12 @@
 #include "bpf_endian.h"
 #include "bpf_helpers.h"
 
-/* https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/if_ether.h */
-#define ETH_P_IP	0x0800
-#define ETH_P_IPV6	0x86DD
+/* https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/if_ether.h
+ */
+#define ETH_P_IP 0x0800
+#define ETH_P_IPV6 0x86DD
 
-#define MAX_RULES   128
+#define MAX_RULES 2048
 
 typedef enum { IP4, IP6 } L3Proto;
 typedef enum { ICMP, TCP, UDP } L4Proto;
@@ -34,34 +35,33 @@ typedef struct __attribute__((packed)) {
 	bool abort;
 } Packet;
 
-static __always_inline enum xdp_action handle_packet(Packet*);
-static __always_inline void parse_ip(struct xdp_md*, struct ethhdr*, Packet*);
-static __always_inline void parse_ip6(struct xdp_md*, struct ethhdr*, Packet*);
-/* use void* instead of iphdr/ipv6hdr since it's gonna get casted anyway */
-static __always_inline void parse_tcp(struct xdp_md*, void*, Packet*);
-static __always_inline void parse_udp(struct xdp_md*, void*, Packet*);
-
-struct ingress_rule {
+typedef struct __attribute__((packed)) {
 	L3Proto l3proto;
 	L4Proto l4proto;
-	__u32   saddr;
-	__u32   saddr6; // todo: fixme
-	__u16   dport;
-} __attribute__((packed));
+	__u32 saddr;
+	__u32 saddr6[4];
+	__u16 dport;
+} IngressRule;
 
-struct bpf_map_def SEC("maps") ingress_rules = {
-    .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(__u32),
-    .value_size = sizeof(struct ingress_rule),
-    .max_entries = MAX_RULES,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__type(key, IngressRule);
+	__type(value, __u8); // unused
+	__uint(max_entries, MAX_RULES);
+} ingress_rules SEC(".maps");
+
+static __always_inline enum xdp_action handle_packet(Packet *);
+static __always_inline void parse_ip(struct xdp_md *, struct ethhdr *, Packet *);
+static __always_inline void parse_ip6(struct xdp_md *, struct ethhdr *, Packet *);
+/* use void* instead of iphdr/ipv6hdr since it's gonna get casted anyway */
+static __always_inline void parse_l4(struct xdp_md *, void *, Packet *, bool);
+static __always_inline void parse_tcp(struct xdp_md *, void *, Packet *);
+static __always_inline void parse_udp(struct xdp_md *, void *, Packet *);
 
 SEC("xdp")
 int beewall_ingress(struct xdp_md *ctx) {
-  	Packet pkt = {};
-	void *data = (void *)(__s64)ctx->data;
+	void *data     = (void *)(__s64)ctx->data;
 	void *data_end = (void *)(__s64)ctx->data_end;
-
 	/* TODO: parse vlan? */
 	struct ethhdr *eth = data;
 
@@ -69,22 +69,23 @@ int beewall_ingress(struct xdp_md *ctx) {
 	if ((void *)(eth + 1) > data_end)
 		return XDP_PASS;
 
+	Packet pkt = {};
 	int hproto = bpf_ntohs(eth->h_proto);
 
 	pkt.abort = false;
 	switch (hproto) {
-		case ETH_P_IP: {
-			pkt.l3proto = IP4;
-			parse_ip(ctx, eth, &pkt);
-			break;
-		}
-		case ETH_P_IPV6: {
-			pkt.l3proto = IP6;
-			parse_ip6(ctx, eth, &pkt);
-			break;
-		}
-		default:
-			goto end;
+	case ETH_P_IP: {
+		pkt.l3proto = IP4;
+		parse_ip(ctx, eth, &pkt);
+		break;
+	}
+	case ETH_P_IPV6: {
+		pkt.l3proto = IP6;
+		parse_ip6(ctx, eth, &pkt);
+		break;
+	}
+	default:
+		goto end;
 	}
 
 	if (pkt.abort)
@@ -97,8 +98,7 @@ end:
 }
 
 static __always_inline void parse_ip(struct xdp_md *ctx, struct ethhdr *eth, Packet *pkt) {
-	void *data_end = (void *)(__s64)ctx->data_end;
-
+	void *data_end   = (void *)(__s64)ctx->data_end;
 	struct iphdr *ip = (struct iphdr *)(eth + 1);
 
 	/* sanity check */
@@ -107,32 +107,13 @@ static __always_inline void parse_ip(struct xdp_md *ctx, struct ethhdr *eth, Pac
 		return;
 	}
 
-	switch (ip->protocol) {
-		case IPPROTO_ICMP: {
-			pkt->l4proto = ICMP;
-			break;
-		}
-		case IPPROTO_TCP: {
-			pkt->l4proto = TCP;
-			parse_tcp(ctx, ip, pkt);
-			break;
-		}
-		case IPPROTO_UDP: {
-			pkt->l4proto = UDP;
-			parse_udp(ctx, ip, pkt);
-			break;
-		}
-		default:
-			pkt->abort = true;
-	}
-
+	parse_l4(ctx, ip, pkt, false);
 	pkt->saddr = ip->saddr;
 	pkt->daddr = ip->daddr;
 }
 
 static __always_inline void parse_ip6(struct xdp_md *ctx, struct ethhdr *eth, Packet *pkt) {
-	void *data_end = (void *)(__s64)ctx->data_end;
-
+	void *data_end     = (void *)(__s64)ctx->data_end;
 	struct ipv6hdr *ip = (struct ipv6hdr *)(eth + 1);
 
 	/* sanity check */
@@ -141,32 +122,42 @@ static __always_inline void parse_ip6(struct xdp_md *ctx, struct ethhdr *eth, Pa
 		return;
 	}
 
-	switch (ip->nexthdr) {
-		case IPPROTO_ICMP: {
-			pkt->l4proto = ICMP;
-			break;
-		}
-		case IPPROTO_TCP: {
-			pkt->l4proto = TCP;
-			parse_tcp(ctx, ip, pkt);
-			break;
-		}
-		case IPPROTO_UDP: {
-			pkt->l4proto = UDP;
-			parse_udp(ctx, ip, pkt);
-			break;
-		}
-		default:
-			pkt->abort = true;
-	}
-
+	parse_l4(ctx, ip, pkt, true);
 	pkt->saddr6 = ip->saddr;
 	pkt->daddr6 = ip->daddr;
 }
 
-static __always_inline void parse_tcp(struct xdp_md *ctx, void *ip, Packet *pkt) {
-	void *data_end = (void *)(__s64)ctx->data_end;
+static __always_inline void parse_l4(struct xdp_md *ctx, void *ip, Packet *pkt, bool v6) {
+	__u8 proto;
 
+	if (v6) {
+		proto = ((struct ipv6hdr *)ip)->nexthdr;
+	} else {
+		proto = ((struct iphdr *)ip)->protocol;
+	}
+
+	switch (proto) {
+	case IPPROTO_ICMP: {
+		pkt->l4proto = ICMP;
+		break;
+	}
+	case IPPROTO_TCP: {
+		pkt->l4proto = TCP;
+		parse_tcp(ctx, ip, pkt);
+		break;
+	}
+	case IPPROTO_UDP: {
+		pkt->l4proto = UDP;
+		parse_udp(ctx, ip, pkt);
+		break;
+	}
+	default:
+		pkt->abort = true;
+	}
+}
+
+static __always_inline void parse_tcp(struct xdp_md *ctx, void *ip, Packet *pkt) {
+	void *data_end     = (void *)(__s64)ctx->data_end;
 	struct tcphdr *tcp = (struct tcphdr *)(ip + 1);
 
 	/* sanity check */
@@ -180,8 +171,7 @@ static __always_inline void parse_tcp(struct xdp_md *ctx, void *ip, Packet *pkt)
 }
 
 static __always_inline void parse_udp(struct xdp_md *ctx, void *ip, Packet *pkt) {
-	void *data_end = (void *)(__s64)ctx->data_end;
-
+	void *data_end     = (void *)(__s64)ctx->data_end;
 	struct udphdr *udp = (struct udphdr *)(ip + 1);
 
 	/* sanity check */
@@ -195,33 +185,27 @@ static __always_inline void parse_udp(struct xdp_md *ctx, void *ip, Packet *pkt)
 }
 
 static __always_inline enum xdp_action handle_packet(Packet *pkt) {
-	struct ingress_rule *ir;
+	IngressRule comparablePkt = {
+		.l3proto = pkt->l3proto,
+		.l4proto = pkt->l4proto,
+		.dport   = pkt->dport,
+	};
 
-	bpf_printk("Pkt(%d,%d,%d)", pkt->l4proto, pkt->saddr, pkt->dport);
-
-	#pragma clang loop unroll(full)
-	for (__u32 i = 0; i < MAX_RULES; i++) {
-		__u32 key = i;
-
-		ir = bpf_map_lookup_elem(&ingress_rules, &key);
-		if (!ir) {
-			/* no rules */
-			goto drop;
-		}
-
-		if (
-			(pkt->l3proto == ir->l3proto) &&
-			(pkt->l4proto == ir->l4proto) &&
-			(pkt->saddr == ir->saddr) &&
-			(pkt->dport == ir->dport)
-		) {
-			bpf_printk("PASS");
-			return XDP_PASS;
-		}
+	switch (pkt->l3proto) {
+	case IP4:
+		comparablePkt.saddr = pkt->saddr;
+	case IP6:
+		// todo: fixme
+		comparablePkt.saddr6[0] = 0;
+		comparablePkt.saddr6[1] = 0;
+		comparablePkt.saddr6[2] = 0;
+		comparablePkt.saddr6[3] = 0;
 	}
 
-drop:
-	/* default action: drop */
+	if ((__u8 *)bpf_map_lookup_elem(&ingress_rules, &comparablePkt)) {
+		bpf_printk("PASS");
+		return XDP_PASS;
+	}
 	bpf_printk("DROP");
 	return XDP_DROP;
 }

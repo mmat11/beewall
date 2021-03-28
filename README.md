@@ -5,7 +5,7 @@
 ## TODOs: 
 
 -  [x]  XDP: parse xdp_md
--  [ ]  ipv6
+-  [x]  ipv6
 -  [x]  XDP: validate against rules and drop/pass
 -  [x]  XDP: attach to interfaces
 -  [ ]  TC: parse skb

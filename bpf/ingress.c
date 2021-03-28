@@ -39,14 +39,14 @@ typedef struct __attribute__((packed)) {
 	L3Proto l3proto;
 	L4Proto l4proto;
 	__u32 saddr;
-	__u32 saddr6[4];
+	struct in6_addr saddr6;
 	__u16 dport;
 } IngressRule;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, IngressRule);
-	__type(value, __u8); // unused
+	__type(value, __u8); /* unused */
 	__uint(max_entries, MAX_RULES);
 } ingress_rules SEC(".maps");
 
@@ -185,28 +185,17 @@ static __always_inline void parse_udp(struct xdp_md *ctx, void *ip, Packet *pkt)
 }
 
 static __always_inline enum xdp_action handle_packet(Packet *pkt) {
-	IngressRule comparablePkt = {
+	IngressRule key = {
 		.l3proto = pkt->l3proto,
 		.l4proto = pkt->l4proto,
 		.dport   = pkt->dport,
+		.saddr = pkt->saddr,
+		.saddr6 = pkt->saddr6,
 	};
 
-	switch (pkt->l3proto) {
-	case IP4:
-		comparablePkt.saddr = pkt->saddr;
-	case IP6:
-		// todo: fixme
-		comparablePkt.saddr6[0] = 0;
-		comparablePkt.saddr6[1] = 0;
-		comparablePkt.saddr6[2] = 0;
-		comparablePkt.saddr6[3] = 0;
-	}
-
-	if ((__u8 *)bpf_map_lookup_elem(&ingress_rules, &comparablePkt)) {
-		bpf_printk("PASS");
+	if ((__u8 *)bpf_map_lookup_elem(&ingress_rules, &key)) {
 		return XDP_PASS;
 	}
-	bpf_printk("DROP");
 	return XDP_DROP;
 }
 

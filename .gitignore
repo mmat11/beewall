@@ -1,2 +1,3 @@
 bpf/*.h
 internal/*_bpfe*
+.vscode/

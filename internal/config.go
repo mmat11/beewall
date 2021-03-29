@@ -22,9 +22,9 @@ type InterfaceConfig struct {
 }
 
 type Rule struct {
-	IPs      []netaddr.IP
-	Protocol Protocol
-	Ports    []Port
+	IPPrefixes []netaddr.IPPrefix
+	Protocol   Protocol
+	Ports      []Port
 }
 
 type Port uint16
@@ -59,7 +59,7 @@ type rawConfig struct {
 }
 
 type rawRule struct {
-	IPs      []string `yaml:"ips"` // TODO: cidr
+	IPs      []string `yaml:"ips"`
 	Protocol string   `yaml:"protocol"`
 	Ports    []string `yaml:"ports"` // TODO: port ranges
 }
@@ -116,11 +116,11 @@ func ruleFromRaw(rr *rawRule) (*Rule, error) {
 	var r Rule
 
 	for _, i := range rr.IPs {
-		ip, err := netaddr.ParseIP(i)
+		ipPrefix, err := netaddr.ParseIPPrefix(i)
 		if err != nil {
 			return nil, fmt.Errorf("load config ip: %w", err)
 		}
-		r.IPs = append(r.IPs, ip)
+		r.IPPrefixes = append(r.IPPrefixes, ipPrefix)
 	}
 
 	switch rr.Protocol {
@@ -145,44 +145,67 @@ func ruleFromRaw(rr *rawRule) (*Rule, error) {
 	return &r, nil
 }
 
-type BpfRule struct {
+type BpfRules map[OuterKey]LpmMap
+type OuterKey struct {
 	L3proto uint32
 	L4proto uint32
-	Saddr   [4]byte
-	Saddr6  [16]byte
 	Dport   uint16
 }
+type LpmMap map[LpmKey]uint8 // val:unused
+type LpmKey struct {
+	Prefixlen uint32
+	Saddr     [16]byte
+}
 
-func (cfg *Config) ToBpf() ([]BpfRule, []BpfRule) {
-	toBpf := func(rules []Rule) []BpfRule {
-		var bpfRules = make([]BpfRule, 0)
+func (cfg *Config) ToBpf() (BpfRules, BpfRules) {
+	toBpf := func(rules []Rule) BpfRules {
+		var bpfRules = make(BpfRules)
 
 		for _, r := range rules {
-			for _, ip := range r.IPs {
+			for _, ipPrefix := range r.IPPrefixes {
 				if r.Protocol == ProtocolICMP {
 					// set the ports to [0] in order to add only one rule
 					r.Ports = []Port{Port(0)}
 				}
 
+				var (
+					l3proto uint8  = 0
+					lpmKey  LpmKey = LpmKey{Prefixlen: uint32(ipPrefix.Bits)}
+				)
+				if ipPrefix.IP.Is6() {
+					l3proto = 1
+				}
+
 				for _, port := range r.Ports {
-					var rule BpfRule
+					var outerKey = OuterKey{L3proto: uint32(l3proto), L4proto: uint32(r.Protocol), Dport: uint16(port)}
 
-					if ip.Is4() {
-						rule.L3proto = 0
-						rule.Saddr = ip.As4()
+					if ipPrefix.IP.Is4() {
+						lpmKey.Saddr = ip4As16(ipPrefix.IP)
 					} else {
-						rule.L3proto = 1
-						rule.Saddr6 = ip.As16()
+						lpmKey.Saddr = ipPrefix.IP.As16()
 					}
-					rule.L4proto = uint32(r.Protocol)
-					rule.Dport = uint16(port)
 
-					bpfRules = append(bpfRules, rule)
+					if _, ok := bpfRules[outerKey]; !ok {
+						bpfRules[outerKey] = make(LpmMap)
+					}
+
+					bpfRules[outerKey][lpmKey] = uint8(1)
 				}
 			}
 		}
+
 		return bpfRules
 	}
 
 	return toBpf(cfg.Rules.Ingress), toBpf(cfg.Rules.Egress)
+}
+
+// ip4As16 creates a byte array to be used as lpm map key.
+// ip.As16() is not ok in this case because the ipv4 part is put at the end.
+func ip4As16(ip netaddr.IP) [16]byte {
+	var ret [16]byte
+	for i, b := range ip.As4() {
+		ret[i] = b
+	}
+	return ret
 }

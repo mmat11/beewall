@@ -4,23 +4,23 @@ interfaces_config:
 rules:
   ingress:
     - ips:
-      - 8.8.8.8
-      - 2001:4860:4860::8888
+      - 8.8.8.0/24
+      - 2001:4860:4860::8888/128
       protocol: icmp
     - ips:
-      - 10.0.0.1
-      - 10.0.0.2
+      - 10.0.0.1/32
+      - 10.0.0.2/32
       protocol: tcp
       ports:
       - 80
       - 443
   egress:
     - ips:
-      - 1.2.3.4
-      - 5.6.7.8
+      - 1.2.3.4/32
+      - 5.6.7.8/32
       protocol: icmp
     - ips:
-      - 10.0.0.1
+      - 10.0.0.1/32
       protocol: tcp
       ports:
       - 80

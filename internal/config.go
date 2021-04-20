@@ -2,15 +2,18 @@ package internal
 
 import (
 	"fmt"
+	"io/ioutil"
+	"log"
 	"net"
 	"strconv"
 
+	"gopkg.in/yaml.v3"
 	"inet.af/netaddr"
 )
 
 type Config struct {
-	InterfacesConfig []InterfaceConfig
-	Rules            struct {
+	Interfaces []InterfaceConfig
+	Rules      struct {
 		Ingress []Rule
 		Egress  []Rule
 	}
@@ -48,10 +51,10 @@ const (
 )
 
 type rawConfig struct {
-	InterfacesConfig []struct {
+	Interfaces []struct {
 		Interface     string `yaml:"interface"`
 		XDPAttachMode string `yaml:"xdp_attach_mode"`
-	} `yaml:"interfaces_config"`
+	} `yaml:"interfaces"`
 	Rules struct {
 		Ingress []rawRule `yaml:"ingress"`
 		Egress  []rawRule `yaml:"egress"`
@@ -64,13 +67,26 @@ type rawRule struct {
 	Ports    []string `yaml:"ports"` // TODO: port ranges
 }
 
+func ConfigFromFile(file string) Config {
+	data, err := ioutil.ReadFile(file)
+	if err != nil {
+		log.Fatalf("open config file: %v", err)
+	}
+
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(data), &cfg); err != nil {
+		log.Fatalf("unmarshal config file: %v", err)
+	}
+	return cfg
+}
+
 func (cfg *Config) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	var raw rawConfig
 	if err := unmarshal(&raw); err != nil {
 		return err
 	}
 
-	for _, ifc := range raw.InterfacesConfig {
+	for _, ifc := range raw.Interfaces {
 		var ifCfg InterfaceConfig
 
 		netIf, err := net.InterfaceByName(ifc.Interface)
@@ -92,7 +108,7 @@ func (cfg *Config) UnmarshalYAML(unmarshal func(interface{}) error) error {
 			return fmt.Errorf("XDP attach mode for interface %s invalid or not supported", netIf.Name)
 		}
 
-		cfg.InterfacesConfig = append(cfg.InterfacesConfig, ifCfg)
+		cfg.Interfaces = append(cfg.Interfaces, ifCfg)
 	}
 	for _, in := range raw.Rules.Ingress {
 		r, err := ruleFromRaw(&in)

@@ -1,7 +1,5 @@
 # beewall
 
-4fun eBPF firewall
-
 ## TODOs: 
 
 -  [x]  XDP: parse xdp_md

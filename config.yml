@@ -1,4 +1,4 @@
-interfaces_config:
+interfaces:
   - interface: enp0s3
     xdp_attach_mode: generic
 rules:

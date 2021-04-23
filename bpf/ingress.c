@@ -63,10 +63,10 @@ struct {
 static __always_inline enum xdp_action handle_packet(Packet *);
 static __always_inline void parse_ip(struct xdp_md *, struct ethhdr *, Packet *);
 static __always_inline void parse_ip6(struct xdp_md *, struct ethhdr *, Packet *);
-/* use void* instead of iphdr/ipv6hdr since it's gonna get casted anyway */
-static __always_inline void parse_l4(struct xdp_md *, void *, Packet *, bool);
-static __always_inline void parse_tcp(struct xdp_md *, void *, Packet *);
-static __always_inline void parse_udp(struct xdp_md *, void *, Packet *);
+static __always_inline void parse_tcp(struct xdp_md *, struct iphdr *, Packet *);
+static __always_inline void parse_udp(struct xdp_md *, struct iphdr *, Packet *);
+static __always_inline void parse_tcp6(struct xdp_md *, struct ipv6hdr *, Packet *);
+static __always_inline void parse_udp6(struct xdp_md *, struct ipv6hdr *, Packet *);
 
 SEC("xdp")
 int ingress(struct xdp_md *ctx) {
@@ -80,10 +80,9 @@ int ingress(struct xdp_md *ctx) {
 		return XDP_PASS;
 
 	Packet pkt = {};
-	int hproto = bpf_ntohs(eth->h_proto);
 
 	pkt.abort = false;
-	switch (hproto) {
+	switch (bpf_ntohs(eth->h_proto)) {
 	case ETH_P_IP: {
 		pkt.l3proto = IP4;
 		parse_ip(ctx, eth, &pkt);
@@ -117,36 +116,10 @@ static __always_inline void parse_ip(struct xdp_md *ctx, struct ethhdr *eth, Pac
 		return;
 	}
 
-	parse_l4(ctx, ip, pkt, false);
 	pkt->saddr = ip->saddr;
 	pkt->daddr = ip->daddr;
-}
 
-static __always_inline void parse_ip6(struct xdp_md *ctx, struct ethhdr *eth, Packet *pkt) {
-	void *data_end     = (void *)(__s64)ctx->data_end;
-	struct ipv6hdr *ip = (struct ipv6hdr *)(eth + 1);
-
-	/* sanity check */
-	if ((void *)(ip + 1) > data_end) {
-		pkt->abort = true;
-		return;
-	}
-
-	parse_l4(ctx, ip, pkt, true);
-	pkt->saddr6 = ip->saddr;
-	pkt->daddr6 = ip->daddr;
-}
-
-static __always_inline void parse_l4(struct xdp_md *ctx, void *ip, Packet *pkt, bool v6) {
-	__u8 proto;
-
-	if (v6) {
-		proto = ((struct ipv6hdr *)ip)->nexthdr;
-	} else {
-		proto = ((struct iphdr *)ip)->protocol;
-	}
-
-	switch (proto) {
+	switch (ip->protocol) {
 	case IPPROTO_ICMP: {
 		pkt->l4proto = ICMP;
 		break;
@@ -166,7 +139,40 @@ static __always_inline void parse_l4(struct xdp_md *ctx, void *ip, Packet *pkt, 
 	}
 }
 
-static __always_inline void parse_tcp(struct xdp_md *ctx, void *ip, Packet *pkt) {
+static __always_inline void parse_ip6(struct xdp_md *ctx, struct ethhdr *eth, Packet *pkt) {
+	void *data_end     = (void *)(__s64)ctx->data_end;
+	struct ipv6hdr *ip = (struct ipv6hdr *)(eth + 1);
+
+	/* sanity check */
+	if ((void *)(ip + 1) > data_end) {
+		pkt->abort = true;
+		return;
+	}
+
+	pkt->saddr6 = ip->saddr;
+	pkt->daddr6 = ip->daddr;
+
+	switch (ip->nexthdr) {
+	case IPPROTO_ICMP: {
+		pkt->l4proto = ICMP;
+		break;
+	}
+	case IPPROTO_TCP: {
+		pkt->l4proto = TCP;
+		parse_tcp6(ctx, ip, pkt);
+		break;
+	}
+	case IPPROTO_UDP: {
+		pkt->l4proto = UDP;
+		parse_udp6(ctx, ip, pkt);
+		break;
+	}
+	default:
+		pkt->abort = true;
+	}
+}
+
+static __always_inline void parse_tcp(struct xdp_md *ctx, struct iphdr *ip, Packet *pkt) {
 	void *data_end     = (void *)(__s64)ctx->data_end;
 	struct tcphdr *tcp = (struct tcphdr *)(ip + 1);
 
@@ -176,11 +182,25 @@ static __always_inline void parse_tcp(struct xdp_md *ctx, void *ip, Packet *pkt)
 		return;
 	}
 
-	pkt->sport = tcp->source;
-	pkt->dport = tcp->dest;
+	pkt->sport = bpf_ntohs(tcp->source);
+	pkt->dport = bpf_ntohs(tcp->dest);
 }
 
-static __always_inline void parse_udp(struct xdp_md *ctx, void *ip, Packet *pkt) {
+static __always_inline void parse_tcp6(struct xdp_md *ctx, struct ipv6hdr *ip, Packet *pkt) {
+	void *data_end     = (void *)(__s64)ctx->data_end;
+	struct tcphdr *tcp = (struct tcphdr *)(ip + 1);
+
+	/* sanity check */
+	if ((void *)(tcp + 1) > data_end) {
+		pkt->abort = true;
+		return;
+	}
+
+	pkt->sport = bpf_ntohs(tcp->source);
+	pkt->dport = bpf_ntohs(tcp->dest);
+}
+
+static __always_inline void parse_udp(struct xdp_md *ctx, struct iphdr *ip, Packet *pkt) {
 	void *data_end     = (void *)(__s64)ctx->data_end;
 	struct udphdr *udp = (struct udphdr *)(ip + 1);
 
@@ -190,8 +210,22 @@ static __always_inline void parse_udp(struct xdp_md *ctx, void *ip, Packet *pkt)
 		return;
 	}
 
-	pkt->sport = udp->source;
-	pkt->dport = udp->dest;
+	pkt->sport = bpf_ntohs(udp->source);
+	pkt->dport = bpf_ntohs(udp->dest);
+}
+
+static __always_inline void parse_udp6(struct xdp_md *ctx, struct ipv6hdr *ip, Packet *pkt) {
+	void *data_end     = (void *)(__s64)ctx->data_end;
+	struct udphdr *udp = (struct udphdr *)(ip + 1);
+
+	/* sanity check */
+	if ((void *)(udp + 1) > data_end) {
+		pkt->abort = true;
+		return;
+	}
+
+	pkt->sport = bpf_ntohs(udp->source);
+	pkt->dport = bpf_ntohs(udp->dest);
 }
 
 static __always_inline enum xdp_action handle_packet(Packet *pkt) {
@@ -206,21 +240,19 @@ static __always_inline enum xdp_action handle_packet(Packet *pkt) {
 		LpmKey lpm_key = {};
 
 		switch (pkt->l3proto) {
-			case IP4:
+		case IP4:
 			lpm_key.prefixlen = 32;
-			case IP6:
+		case IP6:
 			lpm_key.prefixlen = 128;
 		};
 
 		__builtin_memcpy(lpm_key.data, &(pkt->saddr), sizeof(pkt->saddr));
 
 		if (bpf_map_lookup_elem(lpm, &lpm_key)) {
-			bpf_printk("pass");
 			return XDP_PASS;
 		}
 	}
 
-	bpf_printk("drop");
 	return XDP_DROP;
 }
 

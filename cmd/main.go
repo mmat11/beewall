@@ -4,10 +4,8 @@ import (
 	"context"
 	"flag"
 	"log"
-	"os"
 
 	"golang.org/x/sys/unix"
-	"gopkg.in/yaml.v3"
 
 	"github.com/mmat11/beewall/internal"
 )
@@ -21,8 +19,6 @@ func main() {
 	)
 	flag.Parse()
 
-	cfg := loadConfig(*configFile)
-
 	if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &unix.Rlimit{
 		Cur: unix.RLIM_INFINITY,
 		Max: unix.RLIM_INFINITY,
@@ -30,21 +26,7 @@ func main() {
 		log.Fatalf("failed to set temporary rlimit: %v", err)
 	}
 
-	if err := internal.Run(ctx, cfg); err != nil {
+	if err := internal.Run(ctx, *configFile); err != nil {
 		log.Fatalf("error while attaching and running programs: %v", err)
 	}
-}
-
-func loadConfig(configFile string) internal.Config {
-	var cfg internal.Config
-
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		log.Fatalf("open config file: %v", err)
-	}
-
-	if err := yaml.Unmarshal([]byte(data), &cfg); err != nil {
-		log.Fatalf("unmarshal config file: %v", err)
-	}
-	return cfg
 }

@@ -161,21 +161,23 @@ func ruleFromRaw(rr *rawRule) (*Rule, error) {
 	return &r, nil
 }
 
-type BpfRules map[OuterKey]LpmMap
-type OuterKey struct {
-	L3proto uint32
-	L4proto uint32
-	Dport   uint16
-}
-type LpmMap map[LpmKey]uint8 // val:unused
-type LpmKey struct {
-	Prefixlen uint32
-	Saddr     [16]byte
-}
+type (
+	BpfRules map[OuterKey]LpmMap
+	OuterKey struct {
+		L3proto uint32
+		L4proto uint32
+		Dport   uint16
+	}
+	LpmMap map[LpmKey]uint8 // val:unused
+	LpmKey struct {
+		Prefixlen uint32
+		Saddr     [16]byte
+	}
+)
 
 func (cfg *Config) ToBpf() (BpfRules, BpfRules) {
 	toBpf := func(rules []Rule) BpfRules {
-		var bpfRules = make(BpfRules)
+		bpfRules := make(BpfRules)
 
 		for _, r := range rules {
 			for _, ipPrefix := range r.IPPrefixes {
@@ -193,7 +195,7 @@ func (cfg *Config) ToBpf() (BpfRules, BpfRules) {
 				}
 
 				for _, port := range r.Ports {
-					var outerKey = OuterKey{L3proto: uint32(l3proto), L4proto: uint32(r.Protocol), Dport: uint16(port)}
+					outerKey := OuterKey{L3proto: uint32(l3proto), L4proto: uint32(r.Protocol), Dport: uint16(port)}
 
 					if ipPrefix.IP.Is4() {
 						lpmKey.Saddr = ip4As16(ipPrefix.IP)

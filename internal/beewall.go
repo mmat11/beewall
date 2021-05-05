@@ -56,7 +56,7 @@ func Run(ctx context.Context, file string) error {
 
 func FillMap(m *ebpf.Map, spec *ebpf.MapSpec, rules BpfRules) {
 	fill := func(k OuterKey, lpm LpmMap) {
-		var contents = make([]ebpf.MapKV, 0)
+		contents := make([]ebpf.MapKV, 0)
 		for k, v := range lpm {
 			contents = append(contents, ebpf.MapKV{Key: k, Value: v})
 		}

@@ -48,7 +48,7 @@ func TestBeewall(t *testing.T) {
 		log.Fatalf("failed to set temporary rlimit: %v", err)
 	}
 
-	var tests = []struct {
+	tests := []struct {
 		name   string
 		config internal.Config
 		packet []byte

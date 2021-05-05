@@ -11,7 +11,7 @@ import (
 )
 
 func TestParseConfig(t *testing.T) {
-	var tests = []struct {
+	tests := []struct {
 		name           string
 		bytes          []byte
 		expectedConfig internal.Config
@@ -88,7 +88,7 @@ rules:
 }
 
 func TestParseConfigInvalid(t *testing.T) {
-	var tests = []struct {
+	tests := []struct {
 		name  string
 		bytes []byte
 	}{

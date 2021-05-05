@@ -1,6 +1,6 @@
 interfaces:
   - interface: enp0s3
-    xdp_attach_mode: generic
+    xdp_attach_mode: drv
 rules:
   ingress:
     - ips:

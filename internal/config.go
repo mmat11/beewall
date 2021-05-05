@@ -44,10 +44,10 @@ const (
 type XDPAttachMode uint8
 
 const (
-	XDPAttachModeGeneric XDPAttachMode = 0
-	XDPAttachModeSkb     XDPAttachMode = 1 << 1
-	XDPAttachModeDrv     XDPAttachMode = 1 << 2
-	XDPAttachModeHW      XDPAttachMode = 1 << 3
+	_ XDPAttachMode = 1 << iota
+	XDPAttachModeSkb
+	XDPAttachModeDrv
+	XDPAttachModeHW
 )
 
 type rawConfig struct {
@@ -96,9 +96,7 @@ func (cfg *Config) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		ifCfg.Interface = *netIf
 
 		switch ifc.XDPAttachMode {
-		case "", "generic":
-			ifCfg.XDPAttachMode = XDPAttachModeGeneric
-		case "skb":
+		case "", "skb", "generic":
 			ifCfg.XDPAttachMode = XDPAttachModeSkb
 		case "drv":
 			ifCfg.XDPAttachMode = XDPAttachModeDrv

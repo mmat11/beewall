@@ -10,7 +10,7 @@
 -  [ ]  TC: validate against rules and drop/pass
 -  [ ]  config: validate (eg. ICMP cannot contain ports)
 -  [ ]  config: port ranges
--  [x]  config: ip ranges https://github.com/mmat11/beewall/pull/3
+-  [x]  config: ip ranges
 -  [x]  tests
 -  [ ]  benchmarks
 
